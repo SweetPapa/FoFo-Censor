@@ -1,0 +1,22 @@
+{
+  "name": "base_profanity",
+  "language": "en",
+  "description": "Common English profanity for the audio beep MVP. Tiers: mild / moderate / severe. Keep this list to unambiguous profanity; context-sensitive homographs should be routed to model disambiguation later.",
+  "entries": [
+    { "term": "damn",        "category": "profanity", "tier": "mild",     "match": "exact" },
+    { "term": "damnit",      "category": "profanity", "tier": "mild",     "match": "exact" },
+    { "term": "dammit",      "category": "profanity", "tier": "mild",     "match": "exact" },
+    { "term": "hell",        "category": "profanity", "tier": "mild",     "match": "exact" },
+    { "term": "crap",        "category": "profanity", "tier": "mild",     "match": "exact" },
+    { "term": "bastard",     "category": "profanity", "tier": "moderate", "match": "exact" },
+    { "term": "bitch",       "category": "profanity", "tier": "moderate", "match": "stem"  },
+    { "term": "shit",        "category": "profanity", "tier": "moderate", "match": "stem"  },
+    { "term": "piss",        "category": "profanity", "tier": "moderate", "match": "stem"  },
+    { "term": "dick",        "category": "profanity", "tier": "moderate", "match": "exact" },
+    { "term": "asshole",     "category": "profanity", "tier": "moderate", "match": "stem"  },
+    { "term": "fuck",        "category": "profanity", "tier": "severe",   "match": "stem"  },
+    { "term": "motherfuck",  "category": "profanity", "tier": "severe",   "match": "stem"  },
+    { "term": "cock",        "category": "profanity", "tier": "severe",   "match": "exact" },
+    { "term": "cunt",        "category": "profanity", "tier": "severe",   "match": "stem"  }
+  ]
+}

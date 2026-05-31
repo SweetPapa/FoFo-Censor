@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fofo-censor"
+version = "0.1.0"
+description = "Local-first video content filtering — Whisper transcription + profanity beep MVP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "faster-whisper>=1.0",
+    "pydantic>=2.5",
+    "rich>=13.0",
+]
+
+[project.scripts]
+fofo-censor = "fofo_censor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["fofo_censor*"]
+
+[tool.setuptools.package-data]
+"fofo_censor.data.wordlists" = ["*.json"]
+"fofo_censor.profiles.starter" = ["*.json"]
+"fofo_censor.prompts" = ["*.txt"]
+"fofo_censor.disclaimers" = ["*.txt"]

@@ -1,0 +1,21 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# --- Working / output artifacts ---
+*.fofocensor.json
+out/
+work/
+.cache/
+
+# --- OS ---
+.DS_Store

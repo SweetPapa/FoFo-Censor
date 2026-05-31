@@ -1,0 +1,44 @@
+{
+  "name": "religious-mom",
+  "description": "Bleep profanity + slurs; cut away only from realistic gore and explicit sexual content. Preserve satire and stereotype.",
+  "audio": {
+    "categories": {
+      "profanity": {
+        "act_on": ["mild", "moderate", "severe"],
+        "style": { "mild": "reverse", "moderate": "reverse", "severe": "beep" }
+      },
+      "slur": { "act_on": ["all"], "style": "beep" },
+      "sexual_term": { "act_on": ["moderate", "severe"], "style": "reverse" }
+    },
+    "wordlists": ["base_profanity"],
+    "preserve_context_segments": true
+  },
+  "safe_replace": {
+    "tone": "comedic",
+    "fit_strategy": "natural",
+    "max_timestretch_pct": 25,
+    "match_syllables": true
+  },
+  "visual": {
+    "enabled": true,
+    "violence": { "stylized": "none", "implied": "none", "realistic": "cutaway" },
+    "sexual": { "suggestive": "none", "explicit": "cutaway" },
+    "tier2_video_when_confidence_below": 0.7
+  },
+  "cutaway": {
+    "card_style": "black_slate_centered_text",
+    "narrate": true,
+    "min_card_sec": 2.5,
+    "max_card_sec": 8.0
+  },
+  "tts": { "engine": "kokoro", "voice": "default", "rate": 1.0 },
+  "disclaimer": { "enabled": true, "narrate": false, "dwell_sec": "auto", "text_ref": "default" },
+  "render": {
+    "export_mode": "efficient",
+    "video_codec": "hevc",
+    "encoder": "software",
+    "quality": 22,
+    "audio_codec": "aac",
+    "container": "mp4"
+  }
+}
