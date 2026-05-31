@@ -13,10 +13,11 @@ from the design doc (§16) is in place; the audio beep path is fully working, an
 the remaining stages are scaffolded with stable interfaces and clear
 `NotImplementedError`s so they drop in milestone by milestone.
 
-**Working today (M1 + parts of M2):**
+**Working today (M1 + M2):**
 
 ```
-ffprobe → Whisper word-level transcript → profile-driven wordlist match → ffmpeg beep/silence/muffle render
+ffprobe → Whisper word-level transcript → profile-driven wordlist match
+        → ffmpeg beep/silence/muffle render + prepended disclaimer card
 ```
 
 - probe + content fingerprint (§6.1)
@@ -26,13 +27,18 @@ ffprobe → Whisper word-level transcript → profile-driven wordlist match → 
 - filter-map sidecar load/save + content-free shareable export (§7.1)
 - decision engine + coverage stats with the "Boondocks guard" warning (§8, §10)
 - `beep`, `silence`, `muffle` render styles (§6.7)
+- **mandatory disclaimer card** prepended to every output, with reading-time
+  auto-dwell and per-profile wording (§12)
+- **full re-encode + concat export** with profile-driven codec/encoder/quality
+  (HEVC / AV1 / H.264, software or NVENC) (§10a)
 - resumable `analyze` / `render` split (§11)
 
 **Scaffolded but not yet wired** (raise clear errors): the OpenAI-compatible
 model client (`model/`), Stage-2 audio disambiguation (`audio/disambiguate.py`),
 safe-word replacement + Kokoro TTS (`audio/safeword.py`, `tts/`), the visual
-cutaway pass (`visual/`), the disclaimer/cutaway card renderers (`render/`), and
-the review TUI (`tui/`). Versioned prompts live in `fofo_censor/prompts/`.
+cutaway pass (`visual/`, `render/cutaway.py`), and the review TUI (`tui/`).
+The `reverse` and `safe_replace` audio styles are downgraded to `beep` with a
+warning until implemented. Versioned prompts live in `fofo_censor/prompts/`.
 
 The only external requirement is `ffmpeg`/`ffprobe` on your PATH. The inference
 endpoint URL and NVENC/encoder choices are config/profile-driven, so nothing ties
@@ -105,12 +111,19 @@ Built-in: `fofo_censor/data/wordlists/base_profanity.json`. Format (design §7.3
 inflections), or `regex` (full-match regex). A profile lists which wordlists to
 load; lists layer (later entries extend earlier ones).
 
-## How the beep render works
+## How rendering works
 
-A single ffmpeg pass: the original audio is muted inside each flagged word window
-via an expression-driven `volume` filter, a gated 1 kHz tone is summed in over the
-same windows (`muffle` low-passes instead), and the video is **stream-copied** (no
-re-encode). Speech outside the windows is untouched.
+The censor itself is an expression-driven ffmpeg filter: the original audio is
+muted inside each flagged word window via a `volume` expression, a gated 1 kHz
+tone is summed in over the same windows (`muffle` low-passes instead).
+
+Because every output carries a mandatory disclaimer card (§12) and a generated
+card can't be stream-copied in, the standard path **re-encodes** in a single
+ffmpeg pass: it builds a black-slate card (`color` + `drawtext`, dwell scaled to
+reading length), normalizes the censored feature, and `concat`s card + feature
+into one HEVC/AV1/H.264 file per the profile's `render` block (§10a). The card is
+not user-suppressible in v1; `--no-disclaimer` exists for development only and
+falls back to the fast stream-copy audio path.
 
 ## Project layout (design §16)
 
@@ -129,10 +142,11 @@ fofo_censor/
   tts/                # Kokoro wrapper + clip cache                [stub]
   decision/           # decision engine + coverage stats         [done]
   render/
-    beep.py           # ffmpeg beep/silence/muffle render          [done]
-    disclaimer.py     # prepended legal card                       [stub]
-    cutaway.py        # cutaway card                               [stub]
-    encode.py         # codec/encoder arg builder                  [helper]
+    pipeline.py       # orchestrator: card + censor, one ffmpeg pass [done]
+    beep.py           # ffmpeg beep/silence/muffle audio filter      [done]
+    disclaimer.py     # prepended legal card (drawtext + dwell)       [done]
+    encode.py         # codec/encoder/quality arg builder            [done]
+    cutaway.py        # cutaway card                                 [stub]
   model/              # OpenAI-compatible client                   [stub]
   profiles/           # profile schema, loader, starter profiles  [done]
   prompts/            # versioned model prompts (§9)

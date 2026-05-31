@@ -35,7 +35,13 @@ from .profiles import (
     list_profiles,
     load_profile,
 )
-from .render import default_output_path, render
+from .render import (
+    RenderSettings,
+    compute_dwell,
+    default_disclaimer_text,
+    default_output_path,
+    render,
+)
 
 console = Console()
 
@@ -125,6 +131,34 @@ def _resolve_profile(name: str) -> Profile:
         return default_profile()
 
 
+def _disclaimer_from_snapshot(snapshot: dict, *, suppress: bool):
+    """Resolve (disclaimer_text, dwell_sec) from a profile snapshot dict.
+
+    The card is mandatory in v1 (§12); it is only omitted when a profile sets
+    `disclaimer.enabled = false`, or via the dev-only `--no-disclaimer` flag.
+    """
+    if suppress:
+        return None, None
+    block = snapshot.get("disclaimer") if isinstance(snapshot, dict) else None
+    block = block or {}
+    if block.get("enabled") is False:
+        return None, None
+
+    text = block.get("text") or default_disclaimer_text()
+
+    dwell_raw = block.get("dwell_sec", "auto")
+    if isinstance(dwell_raw, (int, float)):
+        dwell = float(dwell_raw)
+    else:  # "auto" or unset
+        dwell = compute_dwell(text)
+    return text, dwell
+
+
+def _render_settings_from_snapshot(snapshot: dict) -> RenderSettings:
+    block = snapshot.get("render") if isinstance(snapshot, dict) else None
+    return RenderSettings.from_profile_block(block)
+
+
 # ---- commands ---------------------------------------------------------------
 
 def cmd_transcribe(args) -> int:
@@ -157,11 +191,18 @@ def cmd_analyze(args) -> int:
 
 def cmd_render(args) -> int:
     fmap = FilterMap.load(args.map)
+    snapshot = fmap.profile.snapshot or {}
+    text, dwell = _disclaimer_from_snapshot(snapshot, suppress=args.no_disclaimer)
+    settings = _render_settings_from_snapshot(snapshot)
+
     out = args.out or default_output_path(args.input)
-    console.print(f"[cyan]Rendering[/cyan] {len(fmap.audio_edits)} edit(s) → {out}")
+    card_note = "with disclaimer card" if text else "no disclaimer card"
+    console.print(f"[cyan]Rendering[/cyan] {len(fmap.audio_edits)} edit(s), "
+                  f"{card_note} → {out}")
     with console.status("Encoding…", spinner="dots"):
         render(args.input, fmap.audio_edits, out,
-               audio_track_index=fmap.source.audio_track_index)
+               audio_track_index=fmap.source.audio_track_index,
+               disclaimer_text=text, dwell_sec=dwell, render_settings=settings)
     console.print(f"[green]✓[/green] Done → [bold]{out}[/bold]")
     return 0
 
@@ -184,11 +225,17 @@ def cmd_run(args) -> int:
         console.print("[yellow]Visual edits would need review (TUI not implemented); "
                       "re-run with --yes to accept all.[/yellow]")
 
+    snapshot = profile.model_dump()
+    text, dwell = _disclaimer_from_snapshot(snapshot, suppress=args.no_disclaimer)
+    settings = _render_settings_from_snapshot(snapshot)
+
     out = args.out or default_output_path(args.input)
-    console.print(f"[cyan]Rendering[/cyan] → {out}")
+    card_note = "with disclaimer card" if text else "no disclaimer card"
+    console.print(f"[cyan]Rendering[/cyan] ({card_note}) → {out}")
     with console.status("Encoding…", spinner="dots"):
         render(args.input, fmap.audio_edits, out,
-               audio_track_index=fmap.source.audio_track_index)
+               audio_track_index=fmap.source.audio_track_index,
+               disclaimer_text=text, dwell_sec=dwell, render_settings=settings)
     console.print(f"[green]✓[/green] Done → [bold]{out}[/bold]")
     return 0
 
@@ -260,6 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("input")
     r.add_argument("--map", required=True, help="Filter-map sidecar to render.")
     r.add_argument("--out", help="Output media path.")
+    r.add_argument("--no-disclaimer", action="store_true",
+                   help="Dev/testing only: skip the disclaimer card (and stream-copy video).")
     r.set_defaults(func=cmd_render)
 
     rn = sub.add_parser("run", help="Analyze then render (one-shot).")
@@ -273,6 +322,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--pad", type=float, default=0.05)
     rn.add_argument("--keep-map", action="store_true",
                     help="Write the sidecar next to the input.")
+    rn.add_argument("--no-disclaimer", action="store_true",
+                    help="Dev/testing only: skip the disclaimer card (and stream-copy video).")
     rn.add_argument("--yes", action="store_true", help="Accept all decisions (headless).")
     add_whisper_opts(rn)
     rn.set_defaults(func=cmd_run)

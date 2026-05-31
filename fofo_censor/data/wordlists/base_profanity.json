@@ -17,6 +17,11 @@
     { "term": "fuck",        "category": "profanity", "tier": "severe",   "match": "stem"  },
     { "term": "motherfuck",  "category": "profanity", "tier": "severe",   "match": "stem"  },
     { "term": "cock",        "category": "profanity", "tier": "severe",   "match": "exact" },
-    { "term": "cunt",        "category": "profanity", "tier": "severe",   "match": "stem"  }
+    { "term": "cunt",        "category": "profanity", "tier": "severe",   "match": "stem"  },
+    { "term": "nigger",      "category": "profanity", "tier": "severe",   "match": "exact" },
+    { "term": "nigga",       "category": "profanity", "tier": "severe",   "match": "stem" },
+    { "term": "niggaz",      "category": "profanity", "tier": "severe",   "match": "exact" },
+    { "term": "pussy",       "category": "profanity", "tier": "severe",   "match": "exact" },
+    { "term": "pussies",     "category": "profanity", "tier": "severe",   "match": "exact" }
   ]
 }
