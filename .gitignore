@@ -13,9 +13,15 @@ dist/
 
 # --- Working / output artifacts ---
 *.fofocensor.json
+*.share.json
 out/
 work/
 .cache/
+
+# Rendered media outputs (build artifacts; keep source media elsewhere)
+*.censored.*
+clean.mp4
+clean-2.mp4
 
 # --- OS ---
 .DS_Store

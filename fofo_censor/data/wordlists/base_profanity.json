@@ -22,6 +22,11 @@
     { "term": "nigga",       "category": "profanity", "tier": "severe",   "match": "stem" },
     { "term": "niggaz",      "category": "profanity", "tier": "severe",   "match": "exact" },
     { "term": "pussy",       "category": "profanity", "tier": "severe",   "match": "exact" },
-    { "term": "pussies",     "category": "profanity", "tier": "severe",   "match": "exact" }
+    { "term": "pussies",     "category": "profanity", "tier": "severe",   "match": "exact" },
+
+    { "term": "ass",         "category": "profanity", "tier": "moderate", "match": "exact", "context_sensitive": true },
+    { "term": "bloody",      "category": "profanity", "tier": "mild",     "match": "exact", "context_sensitive": true },
+    { "term": "prick",       "category": "profanity", "tier": "moderate", "match": "exact", "context_sensitive": true },
+    { "term": "bastards",    "category": "profanity", "tier": "moderate", "match": "exact", "context_sensitive": true }
   ]
 }

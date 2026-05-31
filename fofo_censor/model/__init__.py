@@ -6,6 +6,6 @@ features (audio.disambiguate, audio.safeword, visual.judge, visual.cutaway) call
 through here so batching, retries, and the endpoint URL live in one place.
 """
 
-from .client import ModelClient, ModelConfig
+from .client import DEFAULT_ENDPOINT, DEFAULT_MODEL, ModelClient, ModelConfig, ModelError
 
-__all__ = ["ModelClient", "ModelConfig"]
+__all__ = ["ModelClient", "ModelConfig", "ModelError", "DEFAULT_ENDPOINT", "DEFAULT_MODEL"]

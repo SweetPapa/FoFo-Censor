@@ -38,17 +38,25 @@ def extract_audio_wav(input_path: str, audio_track_index: int = 0) -> str:
 def transcribe_words(
     input_path: str,
     *,
-    model_size: str = "base.en",
+    model_size: str = "small.en",
     device: str = "cpu",
     compute_type: str = "int8",
     language: Optional[str] = None,
     audio_track_index: int = 0,
+    vad_filter: bool = True,
+    beam_size: int = 5,
     on_progress=None,
 ) -> list[WordToken]:
     """Transcribe a media file to a flat list of timestamped words.
 
     `on_progress(segment_text, end_time)` is called per segment if provided, so a
     CLI can show live progress.
+
+    Defaults to the `small.en` model — a meaningful accuracy bump over `base.en`
+    (fewer missed words) at modest cost. For maximum accuracy use `medium.en` or
+    `large-v3`. VAD is on by default but uses a conservative
+    `min_silence_duration_ms` so it trims silence without clipping short words;
+    pass `vad_filter=False` to disable it entirely.
     """
     # Imported lazily so `--help` and non-transcribe commands don't pay the
     # heavy import / model-load cost.
@@ -61,7 +69,11 @@ def transcribe_words(
             wav_path,
             language=language,
             word_timestamps=True,
-            vad_filter=True,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+            # Less aggressive than the default 2000ms so brief words between
+            # short pauses aren't dropped (addresses missed-word reports).
+            vad_parameters={"min_silence_duration_ms": 500} if vad_filter else None,
         )
 
         words: list[WordToken] = []

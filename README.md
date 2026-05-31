@@ -13,16 +13,19 @@ from the design doc (§16) is in place; the audio beep path is fully working, an
 the remaining stages are scaffolded with stable interfaces and clear
 `NotImplementedError`s so they drop in milestone by milestone.
 
-**Working today (M1 + M2):**
+**Working today (M1 + M2 + M4):**
 
 ```
-ffprobe → Whisper word-level transcript → profile-driven wordlist match
+ffprobe → Whisper word-level transcript → Stage-1 wordlist match
+        → Stage-2 model disambiguation (optional) → profile decision
         → ffmpeg beep/silence/muffle render + prepended disclaimer card
 ```
 
 - probe + content fingerprint (§6.1)
-- Whisper word timestamps (§6.2), local CPU by default — no GPU required
+- Whisper word timestamps (§6.2); default model `small.en`, local CPU — no GPU required
 - deterministic wordlist matching with `exact`/`stem`/`regex` modes (§6.2, §7.3)
+- **Stage-2 contextual disambiguation** of context-sensitive homographs via a
+  local OpenAI-compatible endpoint (§6.2 step 4, §7.4); slurs are never un-flagged
 - profile system with per-category / per-tier styles + starter profile (§7.2)
 - filter-map sidecar load/save + content-free shareable export (§7.1)
 - decision engine + coverage stats with the "Boondocks guard" warning (§8, §10)
@@ -33,12 +36,24 @@ ffprobe → Whisper word-level transcript → profile-driven wordlist match
   (HEVC / AV1 / H.264, software or NVENC) (§10a)
 - resumable `analyze` / `render` split (§11)
 
-**Scaffolded but not yet wired** (raise clear errors): the OpenAI-compatible
-model client (`model/`), Stage-2 audio disambiguation (`audio/disambiguate.py`),
-safe-word replacement + Kokoro TTS (`audio/safeword.py`, `tts/`), the visual
-cutaway pass (`visual/`, `render/cutaway.py`), and the review TUI (`tui/`).
-The `reverse` and `safe_replace` audio styles are downgraded to `beep` with a
-warning until implemented. Versioned prompts live in `fofo_censor/prompts/`.
+**Scaffolded but not yet wired** (raise clear errors): safe-word replacement +
+Kokoro TTS (`audio/safeword.py`, `tts/`), the visual cutaway pass (`visual/`,
+`render/cutaway.py`), and the review TUI (`tui/`). The `reverse` and
+`safe_replace` audio styles are downgraded to `beep` with a warning until
+implemented. Versioned prompts live in `fofo_censor/prompts/`.
+
+### Stage-2 disambiguation
+
+`--disambiguate` routes context-sensitive wordlist hits (homographs like "ass"
+the insult vs. the animal) to a local model for an in-context yes/no, so they're
+only censored when actually objectionable. Configure the endpoint via
+`--endpoint` / `--model-id` or the `FOFO_ENDPOINT` / `FOFO_MODEL` env vars
+(defaults: `http://192.168.1.99:8080/v1`, `qwen3-vl-30b`). If the endpoint is
+unreachable the analysis degrades gracefully to list-only results.
+
+```bash
+fofo-censor analyze input.mp4 --profile religious-mom --disambiguate
+```
 
 The only external requirement is `ffmpeg`/`ffprobe` on your PATH. The inference
 endpoint URL and NVENC/encoder choices are config/profile-driven, so nothing ties
@@ -85,9 +100,13 @@ Useful flags:
 | `--pad SECONDS` | padding around each flagged word (default 0.05) |
 | `--map PATH` | reuse an existing sidecar (skip re-transcription) |
 | `--export-share` | also write a content-free shareable sidecar |
+| `--disambiguate` | enable Stage-2 model disambiguation (analyze/run) |
+| `--endpoint` / `--model-id` | override the model endpoint / id |
+| `--no-vad` | disable voice-activity filtering (recovers words VAD clips) |
 
-The first run downloads the chosen Whisper model. Larger models transcribe more
-accurately (fewer missed or mis-timed words) at the cost of speed.
+The first run downloads the chosen Whisper model. The default is `small.en`;
+`medium.en` and `large-v3` transcribe more accurately (fewer missed or mis-timed
+words) at the cost of speed. If words are still missed, also try `--no-vad`.
 
 > Profile styles `reverse` and `safe_replace` are defined in the schema but not
 > yet implemented; the renderer downgrades them to `beep` with a warning so a
@@ -110,6 +129,11 @@ Built-in: `fofo_censor/data/wordlists/base_profanity.json`. Format (design §7.3
 `match` is `exact` (normalized equality), `stem` (token starts with term — catches
 inflections), or `regex` (full-match regex). A profile lists which wordlists to
 load; lists layer (later entries extend earlier ones).
+
+Add `"context_sensitive": true` to an entry to route it to Stage-2 model
+disambiguation instead of auto-flagging — used for homographs ("ass", "bloody",
+"prick") that are only sometimes profanity. These are skipped entirely unless
+`--disambiguate` is on.
 
 ## How rendering works
 
@@ -136,7 +160,7 @@ fofo_censor/
   audio/
     transcribe.py     # faster-whisper word timestamps          [done]
     classify.py       # wordlists + deterministic matching        [done]
-    disambiguate.py   # Stage-2 model disambiguation              [stub]
+    disambiguate.py   # Stage-2 model disambiguation              [done]
     safeword.py       # safe-word text gen + window fitting        [stub]
   visual/             # shots / judge / cutaway                    [stub]
   tts/                # Kokoro wrapper + clip cache                [stub]
@@ -147,7 +171,7 @@ fofo_censor/
     disclaimer.py     # prepended legal card (drawtext + dwell)       [done]
     encode.py         # codec/encoder/quality arg builder            [done]
     cutaway.py        # cutaway card                                 [stub]
-  model/              # OpenAI-compatible client                   [stub]
+  model/              # OpenAI-compatible client (httpx + retries)  [done]
   profiles/           # profile schema, loader, starter profiles  [done]
   prompts/            # versioned model prompts (§9)
   disclaimers/        # disclaimer text resources (§12)

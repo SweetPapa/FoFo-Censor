@@ -24,7 +24,7 @@ from rich.console import Console
 from . import __version__
 from .audio.classify import Wordlist
 from .audio.transcribe import transcribe_words
-from .decision import build_audio_edits, compute_coverage
+from .decision import build_audio_edits, build_disambiguated_edits, compute_coverage
 from .decision.coverage import coverage_warning
 from .filtermap import FilterMap, ModelSnapshot, ProfileRef, SourceInfo, to_shareable
 from .probe import FFmpegNotFound, fingerprint_file, probe
@@ -79,6 +79,7 @@ def _transcribe_to_map(input_path: str, profile: Profile, args) -> FilterMap:
             device=args.device,
             compute_type=args.compute_type,
             audio_track_index=args.audio_track,
+            vad_filter=not getattr(args, "no_vad", False),
         )
     console.print(f"[green]✓[/green] Transcribed [bold]{len(words)}[/bold] words "
                   f"({info.duration_sec:.1f}s).")
@@ -98,12 +99,60 @@ def _transcribe_to_map(input_path: str, profile: Profile, args) -> FilterMap:
     )
 
 
+def _make_client(args):
+    """Build a ModelClient from env + CLI overrides."""
+    from .model import ModelClient, ModelConfig
+    cfg = ModelConfig.from_env()
+    if getattr(args, "endpoint", None):
+        cfg.endpoint = args.endpoint
+    if getattr(args, "model_id", None):
+        cfg.model = args.model_id
+    return ModelClient(cfg)
+
+
+def _run_disambiguation(fmap: FilterMap, profile: Profile, wordlist, args) -> list:
+    """Stage-2: route context-sensitive homographs through the model (§6.2 step 4)."""
+    client = _make_client(args)
+    console.print(f"[cyan]Disambiguating[/cyan] context-sensitive words via "
+                  f"{client.config.model} @ {client.config.endpoint}…")
+    if not client.healthcheck():
+        console.print("[yellow]Model endpoint unreachable or model not served; "
+                      "skipping Stage-2 (using list-only results).[/yellow]")
+        return []
+    try:
+        extra = build_disambiguated_edits(
+            fmap.transcript, wordlist, profile, client=client, pad_sec=args.pad
+        )
+    except Exception as exc:  # noqa: BLE001 - degrade gracefully (§13a)
+        console.print(f"[yellow]Stage-2 disambiguation failed ({exc}); "
+                      "using list-only results.[/yellow]")
+        return []
+
+    # Record model provenance in the sidecar.
+    fmap.models.vision_text = client.config.model
+    fmap.models.endpoint = client.config.endpoint
+    fmap.models.prompt_version = "audio_disambiguator.v1"
+
+    if extra:
+        console.print(f"[green]Stage-2 confirmed {len(extra)} additional word(s):[/green] "
+                      + ", ".join(sorted({e.word for e in extra})))
+    else:
+        console.print("[dim]Stage-2 added no edits.[/dim]")
+    return extra
+
+
 def _apply_decisions(fmap: FilterMap, profile: Profile, args) -> None:
     wordlist = _load_wordlists(profile)
     edits = build_audio_edits(fmap.transcript, wordlist, profile, pad_sec=args.pad)
+
+    if getattr(args, "disambiguate", False):
+        edits.extend(_run_disambiguation(fmap, profile, wordlist, args))
+
     if getattr(args, "style", None):
         for e in edits:
             e.style = args.style
+
+    edits.sort(key=lambda e: e.start)
     fmap.audio_edits = edits
 
     if getattr(args, "visual", False):
@@ -276,12 +325,21 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_whisper_opts(sp):
-        sp.add_argument("--model", default="base.en",
-                        help="Whisper model (tiny.en, base.en, small.en, medium, large-v3).")
+        sp.add_argument("--model", default="small.en",
+                        help="Whisper model (tiny.en, base.en, small.en (default), "
+                             "medium.en, large-v3). Larger = more accurate, slower.")
         sp.add_argument("--device", default="cpu", help="cpu or cuda.")
         sp.add_argument("--compute-type", default="int8",
                         help="faster-whisper compute type (int8, float16, float32).")
         sp.add_argument("--audio-track", type=int, default=0, help="Audio track index.")
+        sp.add_argument("--no-vad", action="store_true",
+                        help="Disable voice-activity filtering (can recover words it clips).")
+
+    def add_model_opts(sp):
+        sp.add_argument("--disambiguate", action="store_true",
+                        help="Stage-2: resolve context-sensitive words via the model endpoint.")
+        sp.add_argument("--endpoint", help="OpenAI-compatible endpoint (default: env/INFINITY).")
+        sp.add_argument("--model-id", help="Model id to request (default: env/qwen3-vl-30b).")
 
     t = sub.add_parser("transcribe", help="Transcript-only sidecar.")
     t.add_argument("input")
@@ -301,6 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--export-share", action="store_true",
                    help="Also write a content-free shareable sidecar.")
     add_whisper_opts(a)
+    add_model_opts(a)
     a.set_defaults(func=cmd_analyze)
 
     r = sub.add_parser("render", help="Render a censored file from a sidecar.")
@@ -326,6 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Dev/testing only: skip the disclaimer card (and stream-copy video).")
     rn.add_argument("--yes", action="store_true", help="Accept all decisions (headless).")
     add_whisper_opts(rn)
+    add_model_opts(rn)
     rn.set_defaults(func=cmd_run)
 
     pv = sub.add_parser("preview", help="Open the review TUI on a sidecar (stub).")
