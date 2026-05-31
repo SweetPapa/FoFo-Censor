@@ -23,8 +23,13 @@ from rich.console import Console
 
 from . import __version__
 from .audio.classify import Wordlist
-from .audio.transcribe import transcribe_words
-from .decision import build_audio_edits, build_disambiguated_edits, compute_coverage
+from .audio.transcribe import _UNSET, transcribe_words
+from .decision import (
+    build_audio_edits,
+    build_disambiguated_edits,
+    build_scanned_edits,
+    compute_coverage,
+)
 from .decision.coverage import coverage_warning
 from .filtermap import FilterMap, ModelSnapshot, ProfileRef, SourceInfo, to_shareable
 from .probe import FFmpegNotFound, fingerprint_file, probe
@@ -80,6 +85,7 @@ def _transcribe_to_map(input_path: str, profile: Profile, args) -> FilterMap:
             compute_type=args.compute_type,
             audio_track_index=args.audio_track,
             vad_filter=not getattr(args, "no_vad", False),
+            initial_prompt=None if getattr(args, "no_profanity_hint", False) else _UNSET,
         )
     console.print(f"[green]✓[/green] Transcribed [bold]{len(words)}[/bold] words "
                   f"({info.duration_sec:.1f}s).")
@@ -110,49 +116,104 @@ def _make_client(args):
     return ModelClient(cfg)
 
 
-def _run_disambiguation(fmap: FilterMap, profile: Profile, wordlist, args) -> list:
-    """Stage-2: route context-sensitive homographs through the model (§6.2 step 4)."""
+def _run_model_passes(fmap: FilterMap, profile: Profile, wordlist, stage1_edits, args) -> list:
+    """Run the model-backed passes whenever the endpoint is available.
+
+    Two passes (both depend on the LLM, so they share one healthcheck):
+      1. Stage-2 disambiguation of context-sensitive list words (§6.2 step 4).
+      2. Holistic full-transcript scan that flags objectionable words the
+         wordlist doesn't contain — the model knows bad words we never listed.
+
+    Returns the combined extra edits. Degrades to [] if the endpoint is down or
+    a pass errors (§13a). `--no-model-scan` disables pass 2.
+    """
     client = _make_client(args)
-    console.print(f"[cyan]Disambiguating[/cyan] context-sensitive words via "
-                  f"{client.config.model} @ {client.config.endpoint}…")
+    console.print(f"[cyan]Model passes[/cyan] via {client.config.model} "
+                  f"@ {client.config.endpoint}…")
     if not client.healthcheck():
         console.print("[yellow]Model endpoint unreachable or model not served; "
-                      "skipping Stage-2 (using list-only results).[/yellow]")
-        return []
-    try:
-        extra = build_disambiguated_edits(
-            fmap.transcript, wordlist, profile, client=client, pad_sec=args.pad
-        )
-    except Exception as exc:  # noqa: BLE001 - degrade gracefully (§13a)
-        console.print(f"[yellow]Stage-2 disambiguation failed ({exc}); "
-                      "using list-only results.[/yellow]")
+                      "skipping model passes (using list-only results).[/yellow]")
         return []
 
-    # Record model provenance in the sidecar.
+    # Record provenance once the endpoint is confirmed live.
     fmap.models.vision_text = client.config.model
     fmap.models.endpoint = client.config.endpoint
-    fmap.models.prompt_version = "audio_disambiguator.v1"
 
-    if extra:
-        console.print(f"[green]Stage-2 confirmed {len(extra)} additional word(s):[/green] "
-                      + ", ".join(sorted({e.word for e in extra})))
-    else:
-        console.print("[dim]Stage-2 added no edits.[/dim]")
+    extra: list = []
+    prompt_versions: list[str] = []
+
+    # Pass 1: disambiguate context-sensitive list words.
+    try:
+        disamb = build_disambiguated_edits(
+            fmap.transcript, wordlist, profile, client=client, pad_sec=args.pad
+        )
+        if disamb:
+            prompt_versions.append("audio_disambiguator.v1")
+            console.print(f"[green]Disambiguation confirmed {len(disamb)} word(s):[/green] "
+                          + ", ".join(sorted({e.word for e in disamb})))
+        extra.extend(disamb)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]Disambiguation pass failed ({exc}); continuing.[/yellow]")
+
+    # Pass 2: holistic scan for unlisted objectionable words.
+    if not getattr(args, "no_model_scan", False):
+        # Don't re-flag tokens Stage-1 or disambiguation already cover.
+        covered = _covered_indices(fmap.transcript, stage1_edits + extra, args.pad)
+        try:
+            scanned = build_scanned_edits(
+                fmap.transcript, profile, client=client, pad_sec=args.pad,
+                exclude_indices=covered,
+            )
+            if scanned:
+                prompt_versions.append("audio_scan.v1")
+                console.print(f"[green]Model scan found {len(scanned)} additional "
+                              f"unlisted word(s):[/green] "
+                              + ", ".join(sorted({e.word for e in scanned})))
+            else:
+                console.print("[dim]Model scan found no unlisted words.[/dim]")
+            extra.extend(scanned)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Model scan failed ({exc}); continuing.[/yellow]")
+
+    if prompt_versions:
+        fmap.models.prompt_version = "+".join(prompt_versions)
     return extra
+
+
+def _covered_indices(transcript, edits, pad_sec) -> set:
+    """Token indices whose time window overlaps an existing edit (for de-dup)."""
+    covered: set[int] = set()
+    for i, tok in enumerate(transcript):
+        for e in edits:
+            # Edits carry the same padding, so compare against the padded window.
+            if e.start <= tok.start + 1e-6 and e.end >= tok.end - 1e-6:
+                covered.add(i)
+                break
+    return covered
 
 
 def _apply_decisions(fmap: FilterMap, profile: Profile, args) -> None:
     wordlist = _load_wordlists(profile)
     edits = build_audio_edits(fmap.transcript, wordlist, profile, pad_sec=args.pad)
 
+    # Run model-backed passes whenever the model is requested/available.
     if getattr(args, "disambiguate", False):
-        edits.extend(_run_disambiguation(fmap, profile, wordlist, args))
+        edits.extend(_run_model_passes(fmap, profile, wordlist, edits, args))
 
     if getattr(args, "style", None):
         for e in edits:
             e.style = args.style
 
-    edits.sort(key=lambda e: e.start)
+    # De-dup by (start,end,word) in case passes overlap, then order by time.
+    seen = set()
+    deduped = []
+    for e in sorted(edits, key=lambda e: (e.start, e.end)):
+        key = (round(e.start, 3), round(e.end, 3), e.word.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(e)
+    edits = deduped
     fmap.audio_edits = edits
 
     if getattr(args, "visual", False):
@@ -325,21 +386,29 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_whisper_opts(sp):
-        sp.add_argument("--model", default="small.en",
-                        help="Whisper model (tiny.en, base.en, small.en (default), "
-                             "medium.en, large-v3). Larger = more accurate, slower.")
+        sp.add_argument("--model", default="medium.en",
+                        help="Whisper model (tiny.en, base.en, small.en, "
+                             "medium.en (default), large-v3). Larger = more accurate, "
+                             "slower. Drop to small.en for speed.")
         sp.add_argument("--device", default="cpu", help="cpu or cuda.")
         sp.add_argument("--compute-type", default="int8",
                         help="faster-whisper compute type (int8, float16, float32).")
         sp.add_argument("--audio-track", type=int, default=0, help="Audio track index.")
         sp.add_argument("--no-vad", action="store_true",
                         help="Disable voice-activity filtering (can recover words it clips).")
+        sp.add_argument("--no-profanity-hint", action="store_true",
+                        help="Disable the initial_prompt that stops Whisper from "
+                             "sanitizing/omitting swear words.")
 
     def add_model_opts(sp):
         sp.add_argument("--disambiguate", action="store_true",
-                        help="Stage-2: resolve context-sensitive words via the model endpoint.")
+                        help="Use the model: disambiguate context-sensitive list words AND "
+                             "scan the whole transcript for unlisted objectionable words.")
+        sp.add_argument("--no-model-scan", action="store_true",
+                        help="With --disambiguate, skip the holistic unlisted-word scan "
+                             "(disambiguation of list words only).")
         sp.add_argument("--endpoint", help="OpenAI-compatible endpoint (default: env/INFINITY).")
-        sp.add_argument("--model-id", help="Model id to request (default: env/qwen3-vl-30b).")
+        sp.add_argument("--model-id", help="Model id to request (default: env/served model).")
 
     t = sub.add_parser("transcribe", help="Transcript-only sidecar.")
     t.add_argument("input")

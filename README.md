@@ -17,15 +17,18 @@ the remaining stages are scaffolded with stable interfaces and clear
 
 ```
 ffprobe → Whisper word-level transcript → Stage-1 wordlist match
-        → Stage-2 model disambiguation (optional) → profile decision
-        → ffmpeg beep/silence/muffle render + prepended disclaimer card
+        → model passes: disambiguate list words + scan for unlisted ones
+        → profile decision → ffmpeg beep/silence/muffle + disclaimer card
 ```
 
 - probe + content fingerprint (§6.1)
-- Whisper word timestamps (§6.2); default model `small.en`, local CPU — no GPU required
+- Whisper word timestamps (§6.2); default model `medium.en`, local CPU — no GPU
+  required. An anti-sanitization `initial_prompt` stops Whisper euphemizing swear words
 - deterministic wordlist matching with `exact`/`stem`/`regex` modes (§6.2, §7.3)
 - **Stage-2 contextual disambiguation** of context-sensitive homographs via a
   local OpenAI-compatible endpoint (§6.2 step 4, §7.4); slurs are never un-flagged
+- **holistic LLM scan** of the full transcript that flags objectionable words the
+  wordlist doesn't contain — the model catches bad words we never listed
 - profile system with per-category / per-tier styles + starter profile (§7.2)
 - filter-map sidecar load/save + content-free shareable export (§7.1)
 - decision engine + coverage stats with the "Boondocks guard" warning (§8, §10)
@@ -42,14 +45,28 @@ Kokoro TTS (`audio/safeword.py`, `tts/`), the visual cutaway pass (`visual/`,
 `safe_replace` audio styles are downgraded to `beep` with a warning until
 implemented. Versioned prompts live in `fofo_censor/prompts/`.
 
-### Stage-2 disambiguation
+### Model passes
 
-`--disambiguate` routes context-sensitive wordlist hits (homographs like "ass"
-the insult vs. the animal) to a local model for an in-context yes/no, so they're
-only censored when actually objectionable. Configure the endpoint via
-`--endpoint` / `--model-id` or the `FOFO_ENDPOINT` / `FOFO_MODEL` env vars
-(defaults: `http://192.168.1.99:8080/v1`, `qwen3-vl-30b`). If the endpoint is
-unreachable the analysis degrades gracefully to list-only results.
+`--disambiguate` turns on the model-backed passes (it means "use the LLM"). When
+the endpoint is reachable, two things happen:
+
+1. **Disambiguation** — context-sensitive wordlist hits (homographs like "ass"
+   the insult vs. the animal) get an in-context yes/no, so they're only censored
+   when actually objectionable.
+2. **Holistic scan** — the *entire* transcript is sent to the model, which flags
+   objectionable words **that aren't in any wordlist** (e.g. `douche`, `wanker`,
+   `twat`). A curated list is never assumed complete; the LLM is the safety net.
+   Disable just this pass with `--no-model-scan`.
+
+The transcript is sent as indexed tokens and the model returns indices, which are
+verified against the word text before becoming edits — so a hallucinated or
+off-by-one index can't censor the wrong moment. Edits found by the model are
+marked `source: "model"` in the sidecar; results de-dup against the wordlist pass.
+
+Configure the endpoint via `--endpoint` / `--model-id` or the `FOFO_ENDPOINT` /
+`FOFO_MODEL` env vars (defaults: `http://192.168.1.99:8080/v1`, and whatever
+single model the server reports). If the endpoint is unreachable, analysis
+degrades gracefully to list-only results.
 
 ```bash
 fofo-censor analyze input.mp4 --profile religious-mom --disambiguate
@@ -100,13 +117,19 @@ Useful flags:
 | `--pad SECONDS` | padding around each flagged word (default 0.05) |
 | `--map PATH` | reuse an existing sidecar (skip re-transcription) |
 | `--export-share` | also write a content-free shareable sidecar |
-| `--disambiguate` | enable Stage-2 model disambiguation (analyze/run) |
+| `--disambiguate` | enable model passes: disambiguate list words + scan for unlisted ones |
+| `--no-model-scan` | with `--disambiguate`, skip the unlisted-word scan |
 | `--endpoint` / `--model-id` | override the model endpoint / id |
 | `--no-vad` | disable voice-activity filtering (recovers words VAD clips) |
 
-The first run downloads the chosen Whisper model. The default is `small.en`;
-`medium.en` and `large-v3` transcribe more accurately (fewer missed or mis-timed
-words) at the cost of speed. If words are still missed, also try `--no-vad`.
+The first run downloads the chosen Whisper model. **Transcription accuracy is the
+ceiling on detection** — a swear word Whisper mishears or drops can never be
+flagged, by the wordlist or the LLM. The default is `medium.en`; `large-v3` is
+more accurate still. Drop to `small.en` only when speed matters (it audibly
+mishears profanity — e.g. "bitch"→"glitch"). On CPU `medium` is ~5× slower than
+`small`; if you have a CUDA GPU (e.g. INFINITY), `--device cuda --compute-type
+float16` makes `medium`/`large-v3` fast. If words are still missed, try
+`large-v3` and `--no-vad`.
 
 > Profile styles `reverse` and `safe_replace` are defined in the schema but not
 > yet implemented; the renderer downgrades them to `beep` with a warning so a

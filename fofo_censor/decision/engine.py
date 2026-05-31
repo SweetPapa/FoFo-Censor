@@ -125,6 +125,51 @@ def build_disambiguated_edits(
     return edits
 
 
+def build_scanned_edits(
+    transcript: list[WordToken],
+    profile: Profile,
+    *,
+    client,
+    pad_sec: float = 0.05,
+    exclude_indices: Optional[set[int]] = None,
+) -> list[AudioEdit]:
+    """Holistic pass: flag objectionable words anywhere, even if unlisted (§6.2).
+
+    Sends the whole transcript to the model (see `audio.scan`) and turns each
+    verified hit into a profile-styled edit. `exclude_indices` lets callers skip
+    tokens already covered by Stage-1/Stage-2 so the same word isn't double-edited.
+    Edits are marked `source="model"`.
+
+    Imported lazily so the audio MVP and tests don't require the model layer.
+    """
+    from ..audio.scan import scan_transcript
+
+    exclude = exclude_indices or set()
+    hits = scan_transcript(transcript, client=client)
+
+    edits: list[AudioEdit] = []
+    for hit in hits:
+        if hit.index in exclude:
+            continue
+        token = transcript[hit.index]
+        style = resolve_audio_style(profile, hit.category, hit.tier)
+        if style is None:
+            continue
+        edits.append(
+            AudioEdit(
+                id=f"s{hit.index}",
+                start=max(0.0, token.start - pad_sec),
+                end=token.end + pad_sec,
+                word=token.word,
+                category=hit.category,
+                tier=hit.tier,
+                style=style,
+                source="model",
+            )
+        )
+    return edits
+
+
 def _as_float(value) -> Optional[float]:
     try:
         return float(value)
